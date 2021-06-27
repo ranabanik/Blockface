@@ -1,5 +1,5 @@
 clc
-sub = 20;
+sub = 190;
 % pwd
 refDir = '/media/banikr2/DATA/Diesel_block/4_refocus';
 segDir = '/media/banikr2/DATA/Diesel_block/5_segmented';
@@ -21,7 +21,8 @@ figure;imshow(segGray)
 % the white background value becomes 255. 
 %% create binary mask
 mask = segGray~=255;
-figure;imshow(mask)
+figure;imshow(mask(400:750, 450:800))
+imwrite(mask(400:750, 450:800), 'binarymask_190.png')
 %% remove unwanted pixels outside brain
 stat = regionprops(mask, 'Area', 'PixelIdxList');
 for nn=1:length(stat)
@@ -29,4 +30,5 @@ for nn=1:length(stat)
         mask(stat(nn).PixelIdxList)= 0;
     end % remove small area
 end
-figure;imshow(mask)
+figure;imshow(mask(400:750, 450:800))
+imwrite(mask(400:750, 450:800), 'binarybrainmask_190.png')
