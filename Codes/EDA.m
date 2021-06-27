@@ -32,3 +32,21 @@ for nn=1:length(stat)
 end
 figure;imshow(mask(400:750, 450:800))
 imwrite(mask(400:750, 450:800), 'binarybrainmask_190.png')
+%% run for all segmentation files
+mskDir = '/media/banikr2/DATA/Diesel_block/6_binarymask';
+for ii=1:length(segFilePaths)
+    segPath = fullfile(segDir, segFilePaths(ii).name);
+    seg = imread(segPath);
+%     size(seg)
+    segGray = rgb2gray(seg);
+    mask = segGray~=255;
+    stat = regionprops(mask, 'Area', 'PixelIdxList');
+    for nn=1:length(stat)
+        if stat(nn).Area<1000 % non-brain
+            mask(stat(nn).PixelIdxList)= 0;
+        end % remove small area
+    end
+    [folder, baseFileNameNoExt, extension] = fileparts(segPath);
+    mskPath = fullfile(mskDir, strcat(baseFileNameNoExt,'.png'));
+    imwrite(mask, mskPath);
+end 
