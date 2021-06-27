@@ -1,5 +1,5 @@
 clc
-sub = 200;
+sub = 20;
 % pwd
 refDir = '/media/banikr2/DATA/Diesel_block/4_refocus';
 segDir = '/media/banikr2/DATA/Diesel_block/5_segmented';
@@ -17,6 +17,16 @@ seg = imread([segDir,'/',segFilePaths(sub).name]);
 
 %% convert to gray 
 segGray = rgb2gray(seg);
+figure;imshow(segGray)
 % the white background value becomes 255. 
 %% create binary mask
 mask = segGray~=255;
+figure;imshow(mask)
+%% remove unwanted pixels outside brain
+stat = regionprops(mask, 'Area', 'PixelIdxList');
+for nn=1:length(stat)
+    if stat(nn).Area<1000 % non-brain
+        mask(stat(nn).PixelIdxList)= 0;
+    end % remove small area
+end
+figure;imshow(mask)
