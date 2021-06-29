@@ -50,3 +50,6 @@ for ii=1:length(segFilePaths)
     mskPath = fullfile(mskDir, strcat(baseFileNameNoExt,'.png'));
     imwrite(mask, mskPath);
 end 
+%%
+
+
