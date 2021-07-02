@@ -6,8 +6,10 @@ from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+import sys
+import random
 from glob import glob
-from Codes.transforms import Normalize
+from Codes.txfromfunc import Normalize
 
 norm = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
@@ -28,31 +30,31 @@ def patchify(img, msk, patchsize, stepsize, retovermat=False, plotovermat=False)
         for c in range(0, img.shape[1] - patchsize[1], stepsize[1]):
             # patches inside
             count += 1
-            print(count, r, c)
+            # print(count, r, c)
             overlapMat[r:r + patchsize[0], c:c + patchsize[1]] += 1
             imgPatch.append(img[r:r + patchsize[0], c:c + patchsize[1], :])
             mskPatch.append(msk[r:r + patchsize[0], c:c + patchsize[1]])
             if c + stepsize[1] + patchsize[1] > img.shape[1]:
                 count += 1
-                print(count, r, c, "column ends")
+                # print(count, r, c, "column ends")
                 overlapMat[r:r + patchsize[0], img.shape[1] - patchsize[1]:img.shape[1]] += 1
                 imgPatch.append(img[r:r + patchsize[0], img.shape[1] - patchsize[1]:img.shape[1], :])
                 mskPatch.append(msk[r:r + patchsize[0], msk.shape[1] - patchsize[1]:img.shape[1]])
             if r + stepsize[0] + patchsize[0] > img.shape[0]:
                 count += 1
-                print(count, r, c, "row ends")
+                # print(count, r, c, "row ends")
                 overlapMat[img.shape[0] - patchsize[0]:img.shape[0], c:c + patchsize[1]] += 1
                 imgPatch.append(img[img.shape[0] - patchsize[0]:img.shape[0], c:c + patchsize[1], :])
                 mskPatch.append(msk[img.shape[0] - patchsize[0]:msk.shape[0], c:c + patchsize[1]])
             if r + stepsize[0] + patchsize[0] > img.shape[0] and c + stepsize[1] + patchsize[1] > img.shape[1]:
                 count += 1
-                print(count, r, c, "row and column ends")
+                # print(count, r, c, "row and column ends")
                 overlapMat[img.shape[0] - patchsize[0]:img.shape[0], img.shape[1] - patchsize[1]:img.shape[1]] += 1
                 imgPatch.append(
                     img[img.shape[0] - patchsize[0]:img.shape[0], img.shape[1] - patchsize[1]:img.shape[1], :])
                 mskPatch.append(msk[msk.shape[0] - patchsize[0]:msk.shape[0], msk.shape[1] - patchsize[1]:msk.shape[1]])
 
-    print("Total patch: ", count)
+    # print("Total patch: ", count)
     imgPatch = np.array(imgPatch).astype(img.dtype)
     mskPatch = np.array(mskPatch).astype(msk.dtype)
     if plotovermat:
@@ -72,7 +74,7 @@ t = T.Compose([
                T.RandomResizedCrop(224),
                T.RandomHorizontalFlip(),
                T.ToTensor(),
-               # normalize
+               normalize
               ])
 
 class BlockSet(Dataset):
@@ -96,8 +98,8 @@ class BlockSet(Dataset):
             PIL_i = Image.fromarray(im[l, ...])#.convert('RGB')
             PIL_m = Image.fromarray(mk[l, ...])#.convert('L')
             i_t = self.tform(PIL_i) # [3, 224, 224]
-            m_t = self.tform(PIL_m)
-            # m_t = T.ToTensor()(PIL_m)
+            # m_t = self.tform(PIL_m)
+            m_t = T.ToTensor()(PIL_m)
             i_t_s[l, ...] = i_t 
             m_t_s[l, ...] = m_t
         m_t_o = torch.ones(2, 64, 224, 224)
@@ -106,6 +108,45 @@ class BlockSet(Dataset):
         m_t_o[0, ...] = m_t_o[0, ...] - m_t_o[1, ...]
         m_t_o = torch.transpose(m_t_o, 1, 0) #, 2, 3)
         return i_t_s, m_t_o # [64, 3, 224, 224], [64, 2, 224, 224]
+
+class BlockSet2(Dataset):
+    def __init__(self, imList, mkList, img_transform=None, msk_transform=None):
+        self.imList = imList
+        self.mkList = mkList
+        self.img_transform = img_transform
+        self.mask_transform = msk_transform
+
+    def __len__(self):
+        return len(self.imList)
+
+    def __getitem__(self, item):
+        imgPIL = Image.open(self.imList[item]).convert('RGB')
+        mskPIL = Image.open(self.mkList[item]).convert('L')
+        imar = np.asarray(imgPIL)
+        mask = np.asarray(mskPIL)
+        mask = mask[:, :, None].repeat(3, axis=2) #(224, 224, 3)
+        # print(mask.shape)
+        seed = random.randrange(sys.maxsize)  # get a random seed so that we can reproducibly do the transofrmations
+        if self.img_transform is not None:
+            random.seed(seed)  # apply this seed to img transforms
+            imtr = self.img_transform(imar)
+        if self.mask_transform is not None:
+            random.seed(seed)
+            mask_new = self.mask_transform(mask)
+            mask_new = np.asarray(mask_new)[:, :, 0].squeeze()
+            mktr = F.to_tensor(mask_new)  # converts to tensor with [0,255] ~ [0,1]
+        # fixme: do we need to one-hot? Depends on the loss function.
+            # torch.Size([3, 224, 224])
+        #
+        # imar = np.transpose(imtr, (2, 0, 1))
+        # imar = imar[None, ...]
+        ###
+        # mkar = np.asarray(mskPIL)
+        # mkoh = np.ones(np.append([2], np.array(mkar.shape)), dtype=mkar.dtype)
+        # mkoh[1, ...] = mkar == 255
+        # mkoh[0, ...] = mkoh[0, ...] - mkoh[1, ...]
+        # mkoh = mkoh[None, ...]
+        return imtr, mktr #mkoh
 
 # +---------+
 # | scratch |
@@ -136,22 +177,22 @@ if __name__ == '__main__':
     patchsize = [224, 224]
     stepsize = [100, 100]
     # im, mk = patchify(im, mk, [224, 224], [100, 100])
-    i, m = patchify(im, mk, patchsize, stepsize, plotovermat=True)
-    # unitSet = BlockSet([refFiles[20]], [mskFiles[20]], tform=t)
-    # x, y = next(iter(unitSet))
-    # # print(x[20, ...].numpy().shape, type(x))
-    # unloader = T.ToPILImage()
-    # def tensor_to_PIL(tensor):
-    #     image = tensor.cpu().clone()
-    #     image = image.squeeze(0)
-    #     image = unloader(image)
-    #     return image
+    # i, m = patchify(im, mk, patchsize, stepsize, plotovermat=True)
+    unitSet = BlockSet([refFiles[20]], [mskFiles[20]], tform=t)
+    x, y = next(iter(unitSet))
+    print(x[20, ...].numpy().shape, type(x))
+    unloader = T.ToPILImage()
+    def tensor_to_PIL(tensor):
+        image = tensor.cpu().clone()
+        image = image.squeeze(0)
+        image = unloader(image)
+        return image
     #
     # print(x.shape, y.shape, torch.unique(y), torch.max(x), torch.min(x), torch.unique(y[:, 0, ...]))
-    # Pimage = T.ToPILImage()(x[32, ...])
-    # plt.imshow(Pimage)
-    # plt.show()
-    # plt.imshow(tensor_to_PIL(y[32, 0, ...]))
-    # plt.show()
-    # plt.imshow(tensor_to_PIL(y[32, 1, ...]))
-    # plt.show()
+    Pimage = tensor_to_PIL(x[32, ...])
+    plt.imshow(Pimage)
+    plt.show()
+    plt.imshow(tensor_to_PIL(y[32, 0, ...]))
+    plt.show()
+    plt.imshow(tensor_to_PIL(y[32, 1, ...]))
+    plt.show()
