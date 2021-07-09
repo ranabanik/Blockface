@@ -8,7 +8,8 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torchvision import models, transforms
 from Codes.Network import Unet_BN
-from Codes.Utilities import BlockSet2, weights_init, dice_loss
+from Codes.Utilities import BlockSet2, weights_init, dice_loss, focal_loss
+import segmentation_models_pytorch as smp
 from PIL import Image
 import time
 import pickle
@@ -26,11 +27,11 @@ patch_size = 224
 
 img_transform = transforms.Compose([
         transforms.ToPILImage(),
-        # transforms.RandomVerticalFlip(),
-        # transforms.RandomHorizontalFlip(),
+        transforms.RandomVerticalFlip(),
+        transforms.RandomHorizontalFlip(),
         # transforms.RandomCrop(size=(patch_size, patch_size), pad_if_needed=True), #these need to be in a reproducible order, first affine transforms and then color
-        # transforms.RandomResizedCrop(size=patch_size),
-        # transforms.RandomRotation(180),
+        transforms.RandomResizedCrop(size=patch_size),
+        transforms.RandomRotation(180),
         # transforms.ColorJitter(brightness=0, contrast=0, saturation=0, hue=.5),
         # transforms.RandomGrayscale(),
         transforms.ToTensor()
@@ -38,14 +39,13 @@ img_transform = transforms.Compose([
     # The pathological example didn't normalize.
     ])
 
-
 msk_transform = transforms.Compose([
         transforms.ToPILImage(),
-        # transforms.RandomVerticalFlip(),
-        # transforms.RandomHorizontalFlip(),
+        transforms.RandomVerticalFlip(),
+        transforms.RandomHorizontalFlip(),
         # transforms.RandomCrop(size=(patch_size, patch_size), pad_if_needed=True), #these need to be in a reproducible order, first affine transforms and then color
-        # transforms.RandomResizedCrop(size=patch_size, interpolation=Image.NEAREST),
-        # transforms.RandomRotation(180),
+        transforms.RandomResizedCrop(size=patch_size, interpolation=Image.NEAREST),
+        transforms.RandomRotation(180),
         # transforms.ToTensor()
 ])
 
@@ -55,9 +55,18 @@ trainLoader = DataLoader(trainSet, batch_size=10, shuffle=True, num_workers=1, p
 validSet = BlockSet2(imgFiles[300:], mskFiles[300:], img_transform=img_transform, msk_transform=msk_transform)
 validLoader = DataLoader(validSet, batch_size=10, shuffle=False, num_workers=1, pin_memory=True)
 # x, y, z = next(iter(trainLoader))
-# print(x.shape, y.shape, z.shape)
-model = Unet_BN(n_classes=2, in_channels=3).to(device)
-learning_rate = 1e-3
+# print(x.shape, y.shape, z.shape, x.dtype, y.dtype, z.dtype)
+# print(torch.max(x), torch.min(x), torch.unique(y), torch.unique(z))
+# model = Unet_BN(n_classes=2, in_channels=3).to(device)
+model = smp.Unet(
+    encoder_name="resnet101",        # choose encoder, e.g. mobilenet_v2 or efficientnet-b7
+    encoder_weights="imagenet",     # use `imagenet` pre-trained weights for encoder initialization
+    in_channels=3,                  # model input channels (1 for gray-scale images, 3 for RGB, etc.)
+    classes=2                       # model output channels (number of classes in your dataset)
+).to(device)
+learning_rate = 1e-4
+clwt = [0.2, 0.8]
+lmbd = 0.3
 
 # bce = nn.BCEWithLogitsLoss()
 bce = nn.BCELoss()
@@ -82,11 +91,11 @@ else:
     train_states = {}
     model_save_criteria = 0
 
-model_ = 'UNet_BN_200_1_sub_BCE_noT'
+model_ = 'UNet_smp_dice_w_tform'
 FILEPATH_MODEL_SAVE = os.path.join(modelDir, '{}.pth'.format(model_))
 # this_project_dir = os.path.join(modelDir, TIME_STAMP)
 FILEPATH_LOG = os.path.join(modelDir, '{}.bin'.format(model_))
-max_epochs = 200
+max_epochs = 50
 loss_epoch_train = []
 loss_epoch_valid = []
 dice_score_train = []
@@ -105,9 +114,11 @@ for epoch in range(max_epochs):
         img, seg = sample[0].to(device), sample[2].to(device)
         out = model(img)
         # print(out.shape, seg.shape)
-        dloss, dice = dice_loss(out, seg)
-        bloss = bce(out, seg)
-        bloss.backward()
+        dloss, dice, _ = dice_loss(out, seg)
+        # bloss = bce(out, seg)
+        floss, _ = focal_loss(out, seg, clwt, gamma=2.0)
+        loss = lmbd * dloss + (1 - lmbd) * floss
+        loss.backward()
         optimizer.step()
         running_loss += dloss.item()
         mean_loss = running_loss / (bIdx + 1)
@@ -137,9 +148,11 @@ for epoch in range(max_epochs):
             img, seg = sample[0].to(device), sample[2].to(device)
             # segC = sample[2].to(device)
             out = model(img)
-            dloss, dice = dice_loss(out, seg)
+            dloss, dice, _ = dice_loss(out, seg)
             # bloss = bce(out, seg)
-            running_loss += dloss.item()
+            floss, _ = focal_loss(out, seg, clwt, gamma=2.0)
+            loss = lmbd * dloss + (1 - lmbd) * floss
+            running_loss += loss.item()
             mean_loss = running_loss / (vIdx + 1)
             running_dice += dice.item()  # dice_per_channel
             mean_dice = running_dice / (vIdx + 1)
@@ -157,7 +170,6 @@ for epoch in range(max_epochs):
     if chosen_criteria > model_save_criteria:
         print('criteria increased from {:.4f} to {:.4f}, saving model ...'
               .format(model_save_criteria, chosen_criteria))
-
         train_states_best = {
             'epoch': epoch + 1,
             'model_state_dict': model.state_dict(),
@@ -181,6 +193,5 @@ for epoch in range(max_epochs):
         'loss_valid': loss_epoch_valid,
         'dice_train': dice_score_train,
         'dice_valid': dice_score_valid}
-
     with open(FILEPATH_LOG, 'wb') as pfile:
             pickle.dump(log, pfile)
